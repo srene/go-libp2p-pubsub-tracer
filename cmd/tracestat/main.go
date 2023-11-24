@@ -31,6 +31,7 @@ func main() {
 
 	summary := flag.Bool("summary", true, "print trace summary")
 	cdf := flag.Bool("cdf", false, "print propagation delay CDF")
+	dup := flag.Bool("dup", false, "print duplicates received per message")
 	avg := flag.Bool("avg", false, "pring average propagation delay per message")
 	jsonOut := flag.String("json", "", "save analysis output to json file")
 	topic := flag.String("topic", "", "analyze traces for a specific topic only")
@@ -43,6 +44,7 @@ func main() {
 		msgs:        make(map[string][]int64),
 		delays:      make(map[string][]int64),
 		avgDelay:    make(map[string]int),
+		duplicates:  make(map[key]int),
 	}
 
 	if *topic != "" {
@@ -73,7 +75,7 @@ func main() {
 		}
 	}
 
-	if *cdf || *avg || *jsonOut != "" {
+	if *cdf || *avg || *dup || *jsonOut != "" {
 		stat.compute()
 	}
 
@@ -89,9 +91,17 @@ func main() {
 	if *avg {
 		stat.printAverageDelay()
 	}
+	if *dup {
+		stat.printDuplicates()
+	}
 	if *jsonOut != "" {
 		err = stat.dumpJSON(*jsonOut)
 	}
+}
+
+type key struct {
+	peer string
+	mid  string
 }
 
 // tracestat is the tree that's populated as we parse the dump.
@@ -119,7 +129,9 @@ type tracestat struct {
 	// messages.
 	delayCDF []sample
 
-	duplicates map[string][]int64
+	duplicates map[key]int
+
+	dupCDF []sample
 
 	avgDelay map[string]int
 }
@@ -229,6 +241,7 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 		ps.publish++
 		ts.aggregate.publish++
 		mid := string(evt.GetPublishMessage().GetMessageID())
+
 		ts.msgs[mid] = append(ts.msgs[mid], timestamp)
 		topic := evt.GetPublishMessage().GetTopic()
 		ts.topics[topic] = struct{}{}
@@ -240,13 +253,21 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 	case pb.TraceEvent_DUPLICATE_MESSAGE:
 		ps.duplicate++
 		ts.aggregate.duplicate++
+		mid := string(evt.GetDuplicateMessage().GetMessageID())
+		peer := string(evt.GetDuplicateMessage().GetReceivedFrom())
+
+		_, ok := ts.duplicates[key{mid, peer}]
+		if !ok {
+			ts.duplicates[key{mid, peer}] = 1
+		} else {
+			ts.duplicates[key{mid, peer}]++
+		}
 
 	case pb.TraceEvent_DELIVER_MESSAGE:
 		ps.deliver++
 		ts.aggregate.deliver++
 		mid := string(evt.GetDeliverMessage().GetMessageID())
 		ts.msgs[mid] = append(ts.msgs[mid], timestamp)
-
 	case pb.TraceEvent_SEND_RPC:
 		ps.sendRPC++
 		ts.aggregate.sendRPC++
@@ -291,11 +312,9 @@ func (ts *tracestat) compute() {
 			if miliDelay > 0 {
 				count += 1
 			}
-			//fmt.Println(miliDelay, len(ts.delays[mid]))
 		}
 		avgDelay := sum / count
 		ts.avgDelay[mid] = avgDelay
-		//fmt.Println("Delays ", len(ts.delays), len(ts.delays[mid]), ts.avgDelay[mid])
 	}
 
 	xsamples := make([]sample, 0, len(samples))
@@ -309,6 +328,26 @@ func (ts *tracestat) compute() {
 		xsamples[i].count += xsamples[i-1].count
 	}
 	ts.delayCDF = xsamples
+
+	// compute the CDF rounded to millisecond precision
+	dups := make(map[int]int)
+	for _, delays := range ts.duplicates {
+		//mdt := int((dt + 499999) / 1000000)
+		dups[delays]++
+	}
+
+	dsamples := make([]sample, 0, len(dups))
+	for dt, count := range dups {
+		fmt.Println(dt, count)
+		dsamples = append(dsamples, sample{dt, count})
+	}
+	sort.Slice(dsamples, func(i, j int) bool {
+		return dsamples[i].delay < dsamples[j].delay
+	})
+	for i := 1; i < len(dsamples); i++ {
+		dsamples[i].count += dsamples[i-1].count
+	}
+	ts.dupCDF = dsamples
 }
 
 func (ts *tracestat) printSummary() {
@@ -334,6 +373,13 @@ func (ts *tracestat) printAverageDelay() {
 	fmt.Printf("=== Average Delay (ms) ===\n")
 	for _, sample := range ts.avgDelay {
 		fmt.Printf("%d\n", sample)
+	}
+}
+
+func (ts *tracestat) printDuplicates() {
+	fmt.Printf("=== Duplicates per message ===\n")
+	for _, sample := range ts.dupCDF {
+		fmt.Printf("%d %d\n", sample.delay, sample.count)
 	}
 }
 
