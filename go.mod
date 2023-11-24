@@ -1,4 +1,4 @@
-module github.com/libp2p/go-libp2p-pubsub-tracer
+module github.com/srene/go-libp2p-pubsub-tracer
 
 go 1.20
 
@@ -10,6 +10,7 @@ require (
 	github.com/libp2p/go-libp2p-core v0.7.0
 	github.com/libp2p/go-libp2p-noise v0.1.1
 	github.com/libp2p/go-libp2p-pubsub v0.4.0
+	github.com/libp2p/go-libp2p-pubsub-tracer v0.0.0-20230814133631-3ac637e87962
 	github.com/libp2p/go-libp2p-tls v0.1.3
 )
 
