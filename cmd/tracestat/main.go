@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/libp2p/go-libp2p-core/peer"
 	pb "github.com/libp2p/go-libp2p-pubsub/pb"
+	"github.com/libp2p/go-libp2p/core/peer"
 
 	ggio "github.com/gogo/protobuf/io"
 )
@@ -419,7 +419,7 @@ func (ts *tracestat) dumpJSON(f string) error {
 	dump.Delays.PerMessage = make(map[string][]int)
 
 	for p, st := range ts.peers {
-		dump.Events.PerPeer[p.Pretty()] = Counts{
+		dump.Events.PerPeer[p.String()] = Counts{
 			Publish:   st.publish,
 			Deliver:   st.deliver,
 			Duplicate: st.duplicate,

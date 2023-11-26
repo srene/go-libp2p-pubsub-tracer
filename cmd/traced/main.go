@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -10,9 +9,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/pnet"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/pnet"
 
 	libp2p "github.com/libp2p/go-libp2p"
 	noise "github.com/libp2p/go-libp2p-noise"
@@ -72,7 +71,7 @@ func main() {
 		opts = append(opts, libp2p.PrivateNetwork(psk))
 	}
 
-	host, err := libp2p.New(context.Background(), opts...)
+	host, err := libp2p.New(opts...)
 	if err != nil {
 		log.Fatal(err)
 	}
