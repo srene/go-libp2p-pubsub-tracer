@@ -47,6 +47,7 @@ func main() {
 		avgDelay:    make(map[string]int),
 		duplicates:  make(map[key]int),
 		hops:        make(map[key]int),
+		msgsPeer:    make(map[key][]int64),
 	}
 
 	if *topic != "" {
@@ -143,6 +144,8 @@ type tracestat struct {
 	hops map[key]int
 
 	hopsCDF []sample
+
+	msgsPeer map[key][]int64
 }
 
 // msgstat holds message statistics.
@@ -278,9 +281,12 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 		ts.aggregate.deliver++
 		mid := string(evt.GetDeliverMessage().GetMessageID())
 
-		//peer := string(evt.GetDuplicateMessage().GetReceivedFrom())
+		peer := string(evt.GetDuplicateMessage().GetReceivedFrom())
 
 		ts.msgs[mid] = append(ts.msgs[mid], timestamp)
+
+		ts.msgsPeer[key{peer, mid}] = append(ts.msgsPeer[key{peer, mid}], timestamp)
+
 	case pb.TraceEvent_SEND_RPC:
 		ps.sendRPC++
 		ts.aggregate.sendRPC++
@@ -299,6 +305,7 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 
 		recvfrom := string(evt.GetSendMessage().GetReceivedFrom())
 
+		//fmt.Println(receiver)
 		if receiver == recvfrom {
 			ts.hops[key{mid, receiver}] = 1
 		} else {
@@ -338,9 +345,13 @@ func (ts *tracestat) compute() {
 		}
 	}
 
-	for mid, _ := range ts.msgs {
+	for mid, timestamps := range ts.msgs {
 		sum := 0
 		count := 0
+		sort.Slice(timestamps, func(i, j int) bool {
+			return timestamps[i] < timestamps[j]
+		})
+
 		for _, delay := range ts.delays[mid] {
 			miliDelay := int((delay + 499999) / 1000000)
 			sum += miliDelay
@@ -388,16 +399,13 @@ func (ts *tracestat) compute() {
 	hopVals := make(map[int]int)
 
 	for _, h := range ts.hops {
-		//mdt := int((dt + 499999) / 1000000)
-		if h == 4 {
-			fmt.Println("Hops ", h)
-		}
+
 		hopVals[h]++
 	}
 
 	hsamples := make([]sample, 0, len(hopVals))
 	for dt, count := range hopVals {
-		fmt.Println(dt, count)
+		//fmt.Println(dt, count)
 		hsamples = append(hsamples, sample{dt, count})
 	}
 	sort.Slice(hsamples, func(i, j int) bool {
