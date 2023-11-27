@@ -33,6 +33,7 @@ func main() {
 	cdf := flag.Bool("cdf", false, "print propagation delay CDF")
 	dup := flag.Bool("dup", false, "print duplicates received per message")
 	avg := flag.Bool("avg", false, "pring average propagation delay per message")
+	hops := flag.Bool("hops", false, "pring average hops per message")
 	jsonOut := flag.String("json", "", "save analysis output to json file")
 	topic := flag.String("topic", "", "analyze traces for a specific topic only")
 	flag.Parse()
@@ -45,6 +46,7 @@ func main() {
 		delays:      make(map[string][]int64),
 		avgDelay:    make(map[string]int),
 		duplicates:  make(map[key]int),
+		hops:        make(map[key]int),
 	}
 
 	if *topic != "" {
@@ -75,7 +77,7 @@ func main() {
 		}
 	}
 
-	if *cdf || *avg || *dup || *jsonOut != "" {
+	if *cdf || *avg || *dup || *hops || *jsonOut != "" {
 		stat.compute()
 	}
 
@@ -93,6 +95,9 @@ func main() {
 	}
 	if *dup {
 		stat.printDuplicates()
+	}
+	if *hops {
+		stat.printHops()
 	}
 	if *jsonOut != "" {
 		err = stat.dumpJSON(*jsonOut)
@@ -134,6 +139,10 @@ type tracestat struct {
 	dupCDF []sample
 
 	avgDelay map[string]int
+
+	hops map[key]int
+
+	hopsCDF []sample
 }
 
 // msgstat holds message statistics.
@@ -144,6 +153,7 @@ type msgstat struct {
 	reject    int
 	sendRPC   int
 	dropRPC   int
+	sent      int
 }
 
 // sample represents a CDF bucket.
@@ -215,9 +225,9 @@ func (ts *tracestat) addEventForTopic(evt *pb.TraceEvent) {
 		mid := string(evt.GetDuplicateMessage().GetMessageID())
 		addEventInTopic(evt, mid)
 
-	case pb.TraceEvent_DELIVER_MESSAGE:
+		/*case pb.TraceEvent_DELIVER_MESSAGE:
 		mid := string(evt.GetDeliverMessage().GetMessageID())
-		addEventInTopic(evt, mid)
+		addEventInTopic(evt, mid)*/
 	}
 }
 
@@ -267,6 +277,9 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 		ps.deliver++
 		ts.aggregate.deliver++
 		mid := string(evt.GetDeliverMessage().GetMessageID())
+
+		//peer := string(evt.GetDuplicateMessage().GetReceivedFrom())
+
 		ts.msgs[mid] = append(ts.msgs[mid], timestamp)
 	case pb.TraceEvent_SEND_RPC:
 		ps.sendRPC++
@@ -275,6 +288,28 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 	case pb.TraceEvent_DROP_RPC:
 		ps.dropRPC++
 		ts.aggregate.dropRPC++
+
+	case pb.TraceEvent_SEND_MESSAGE:
+		ts.aggregate.sent++
+		mid := string(evt.GetSendMessage().GetMessageID())
+
+		sender := string(evt.GetSendMessage().GetSender())
+
+		receiver := string(evt.GetSendMessage().GetReceiver())
+
+		recvfrom := string(evt.GetSendMessage().GetReceivedFrom())
+
+		if receiver == recvfrom {
+			ts.hops[key{mid, receiver}] = 1
+		} else {
+			_, ok := ts.hops[key{mid, receiver}]
+			if !ok {
+				hop := ts.hops[key{mid, sender}]
+				hop += 1
+				ts.hops[key{mid, receiver}] = hop
+			}
+		}
+
 	}
 }
 
@@ -338,7 +373,7 @@ func (ts *tracestat) compute() {
 
 	dsamples := make([]sample, 0, len(dups))
 	for dt, count := range dups {
-		fmt.Println(dt, count)
+		//fmt.Println(dt, count)
 		dsamples = append(dsamples, sample{dt, count})
 	}
 	sort.Slice(dsamples, func(i, j int) bool {
@@ -348,6 +383,31 @@ func (ts *tracestat) compute() {
 		dsamples[i].count += dsamples[i-1].count
 	}
 	ts.dupCDF = dsamples
+
+	// compute the CDF rounded to millisecond precision
+	hopVals := make(map[int]int)
+
+	for _, h := range ts.hops {
+		//mdt := int((dt + 499999) / 1000000)
+		if h == 4 {
+			fmt.Println("Hops ", h)
+		}
+		hopVals[h]++
+	}
+
+	hsamples := make([]sample, 0, len(hopVals))
+	for dt, count := range hopVals {
+		fmt.Println(dt, count)
+		hsamples = append(hsamples, sample{dt, count})
+	}
+	sort.Slice(hsamples, func(i, j int) bool {
+		return hsamples[i].delay < hsamples[j].delay
+	})
+	for i := 1; i < len(hsamples); i++ {
+		hsamples[i].count += hsamples[i-1].count
+	}
+	ts.hopsCDF = hsamples
+
 }
 
 func (ts *tracestat) printSummary() {
@@ -360,6 +420,7 @@ func (ts *tracestat) printSummary() {
 	fmt.Printf("Rejected Messages: %d\n", ts.aggregate.reject)
 	fmt.Printf("Sent RPCs: %d\n", ts.aggregate.sendRPC)
 	fmt.Printf("Dropped RPCs: %d\n", ts.aggregate.dropRPC)
+	fmt.Printf("Sent Msgs: %d\n", ts.aggregate.sent)
 }
 
 func (ts *tracestat) printCDF() {
@@ -383,6 +444,13 @@ func (ts *tracestat) printDuplicates() {
 	}
 }
 
+func (ts *tracestat) printHops() {
+	fmt.Printf("=== Hops per message ===\n")
+	for _, sample := range ts.hopsCDF {
+		fmt.Printf("%d %d\n", sample.delay, sample.count)
+	}
+}
+
 func (ts *tracestat) dumpJSON(f string) error {
 	w, err := os.OpenFile(f, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
@@ -394,7 +462,7 @@ func (ts *tracestat) dumpJSON(f string) error {
 
 	// Counts breaks down counts per event type.
 	type Counts struct {
-		Publish, Deliver, Duplicate, Reject, SendRPC, DropRPC int
+		Publish, Deliver, Duplicate, Reject, SendRPC, DropRPC, Sent int
 	}
 
 	// Bucket represents a bucket in a cumulative distribution function.
@@ -426,6 +494,7 @@ func (ts *tracestat) dumpJSON(f string) error {
 			Reject:    st.reject,
 			SendRPC:   st.sendRPC,
 			DropRPC:   st.dropRPC,
+			Sent:      st.sent,
 		}
 	}
 
@@ -436,6 +505,7 @@ func (ts *tracestat) dumpJSON(f string) error {
 		Reject:    ts.aggregate.reject,
 		SendRPC:   ts.aggregate.sendRPC,
 		DropRPC:   ts.aggregate.dropRPC,
+		Sent:      ts.aggregate.sent,
 	}
 
 	for mid, delays := range ts.delays {
