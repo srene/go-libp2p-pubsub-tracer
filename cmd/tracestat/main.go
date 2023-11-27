@@ -146,6 +146,10 @@ type tracestat struct {
 	hopsCDF []sample
 
 	msgsPeer map[key][]int64
+
+	msgsOrder []string
+
+	//count int
 }
 
 // msgstat holds message statistics.
@@ -255,6 +259,14 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 		ts.aggregate.publish++
 		mid := string(evt.GetPublishMessage().GetMessageID())
 
+		_, ok := ts.msgs[mid]
+
+		if !ok {
+			//ts.count++
+			//ts.msgsOrder[ts.count] = mid
+			ts.msgsOrder = append(ts.msgsOrder, mid)
+			//fmt.Println("new message", mid)
+		}
 		ts.msgs[mid] = append(ts.msgs[mid], timestamp)
 		topic := evt.GetPublishMessage().GetTopic()
 		ts.topics[topic] = struct{}{}
@@ -282,6 +294,15 @@ func (ts *tracestat) addEvent(evt *pb.TraceEvent) {
 		mid := string(evt.GetDeliverMessage().GetMessageID())
 
 		peer := string(evt.GetDuplicateMessage().GetReceivedFrom())
+
+		_, ok := ts.msgs[mid]
+
+		if !ok {
+			//ts.count++
+			//ts.msgsOrder[ts.count] = mid
+			ts.msgsOrder = append(ts.msgsOrder, mid)
+			//fmt.Println("new deliver message", mid, ts.count, timestamp)
+		}
 
 		ts.msgs[mid] = append(ts.msgs[mid], timestamp)
 
@@ -345,24 +366,6 @@ func (ts *tracestat) compute() {
 		}
 	}
 
-	for mid, timestamps := range ts.msgs {
-		sum := 0
-		count := 0
-		sort.Slice(timestamps, func(i, j int) bool {
-			return timestamps[i] < timestamps[j]
-		})
-
-		for _, delay := range ts.delays[mid] {
-			miliDelay := int((delay + 499999) / 1000000)
-			sum += miliDelay
-			if miliDelay > 0 {
-				count += 1
-			}
-		}
-		avgDelay := sum / count
-		ts.avgDelay[mid] = avgDelay
-	}
-
 	xsamples := make([]sample, 0, len(samples))
 	for dt, count := range samples {
 		xsamples = append(xsamples, sample{dt, count})
@@ -416,6 +419,27 @@ func (ts *tracestat) compute() {
 	}
 	ts.hopsCDF = hsamples
 
+	/*for i, id := range ts.msgsOrder {
+		fmt.Println(i, id)
+	}*/
+
+	for mid, timestamps := range ts.msgs {
+		sum := 0
+		count := 0
+		sort.Slice(timestamps, func(i, j int) bool {
+			return timestamps[i] < timestamps[j]
+		})
+
+		for _, delay := range ts.delays[mid] {
+			miliDelay := int((delay + 499999) / 1000000)
+			sum += miliDelay
+			if miliDelay > 0 {
+				count += 1
+			}
+		}
+		avgDelay := sum / count
+		ts.avgDelay[mid] = avgDelay
+	}
 }
 
 func (ts *tracestat) printSummary() {
@@ -440,8 +464,8 @@ func (ts *tracestat) printCDF() {
 
 func (ts *tracestat) printAverageDelay() {
 	fmt.Printf("=== Average Delay (ms) ===\n")
-	for _, sample := range ts.avgDelay {
-		fmt.Printf("%d\n", sample)
+	for _, sample := range ts.msgsOrder {
+		fmt.Printf("%d\n", ts.avgDelay[sample])
 	}
 }
 
